@@ -1,0 +1,142 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1, viewport-fit=cover">
+<title>Standardizing a normal distribution</title>
+<style>
+:root{--bg:#f5f7fa;--panel:#fff;--ink:#16213a;--mute:#5d6882;--line:#d5dbe6;--x:#d9822b;--z:#3b3fc4;--fillx:rgba(217,130,43,.25);--fillz:rgba(59,63,196,.25);
+box-sizing:border-box;padding-top:env(safe-area-inset-top,0px);padding-bottom:env(safe-area-inset-bottom,0px)}
+@media (prefers-color-scheme:dark){:root:not([data-theme="light"]){--bg:#10151f;--panel:#182030;--ink:#e8ecf5;--mute:#98a3bd;--line:#2c3750;--x:#f0a35a;--z:#8c90ff;--fillx:rgba(240,163,90,.28);--fillz:rgba(140,144,255,.3)}}
+:root[data-theme="dark"]{--bg:#10151f;--panel:#182030;--ink:#e8ecf5;--mute:#98a3bd;--line:#2c3750;--x:#f0a35a;--z:#8c90ff;--fillx:rgba(240,163,90,.28);--fillz:rgba(140,144,255,.3)}
+html{scroll-padding-top:env(safe-area-inset-top,0px)}
+body{margin:0;background:var(--bg);color:var(--ink);font:16px/1.5 "Figtree",system-ui,sans-serif}
+main{max-width:920px;margin:0 auto;padding:20px 16px 32px}
+h1{font:600 clamp(24px,4vw,34px)/1.15 "Newsreader",Georgia,serif;margin:0 0 4px}
+p.sub{margin:0 0 16px;color:var(--mute);max-width:62ch}
+.card{background:var(--panel);border:1px solid var(--line);border-radius:10px;padding:14px}
+.formula{font:500 clamp(20px,3.4vw,28px) "Newsreader",Georgia,serif;text-align:center;margin:4px 0 2px}
+.stage{text-align:center;color:var(--mute);min-height:1.5em;margin-bottom:6px}
+canvas{width:100%;height:340px;display:block}
+.controls{display:grid;grid-template-columns:repeat(auto-fit,minmax(200px,1fr));gap:12px 20px;margin-top:14px}
+label{display:flex;justify-content:space-between;font-size:14px;color:var(--mute)}
+label b{color:var(--ink);font-variant-numeric:tabular-nums}
+input[type=range]{width:100%;accent-color:var(--z)}
+.row{display:flex;gap:10px;align-items:center;margin-top:14px}
+.row input{flex:1}
+button{font:600 15px "Figtree",system-ui,sans-serif;background:var(--z);color:#fff;border:0;border-radius:8px;padding:9px 18px;cursor:pointer}
+button.alt{background:transparent;color:var(--ink);border:1px solid var(--line)}
+button:focus-visible,input:focus-visible{outline:3px solid var(--x);outline-offset:2px}
+.read{display:grid;grid-template-columns:repeat(auto-fit,minmax(150px,1fr));gap:10px;margin-top:14px;font-size:14px}
+.read div{border-left:3px solid var(--line);padding-left:10px;color:var(--mute)}
+.read b{display:block;font-size:19px;color:var(--ink);font-variant-numeric:tabular-nums}
+</style>
+</head>
+<body>
+<main>
+<h1>Turn any normal into the standard normal</h1>
+<p class="sub">Press play. First we subtract μ to slide the center to 0, then we divide by σ to squeeze the spread to 1. The shaded area never changes, so probabilities are preserved.</p>
+<div class="card">
+  <div class="formula">Z = (X − μ) / σ</div>
+  <div class="stage" id="stage"></div>
+  <canvas id="c" role="img" aria-label="Normal curve being shifted and scaled into the standard normal curve"></canvas>
+  <div class="row">
+    <button id="play">Play</button>
+    <button id="reset" class="alt">Reset</button>
+    <input type="range" id="t" min="0" max="1000" value="0" aria-label="Animation progress">
+  </div>
+  <div class="controls">
+    <div><label>Mean μ <b id="muV"></b></label><input type="range" id="mu" min="-50" max="150" step="1" value="70"></div>
+    <div><label>Standard deviation σ <b id="sdV"></b></label><input type="range" id="sd" min="0.5" max="30" step="0.5" value="10"></div>
+    <div><label>Pick a value x <b id="xV"></b></label><input type="range" id="zx" min="-3.5" max="3.5" step="0.05" value="1"></div>
+  </div>
+  <div class="read">
+    <div>Current mean<b id="rM"></b></div>
+    <div>Current std. deviation<b id="rS"></b></div>
+    <div>Your point now<b id="rP"></b></div>
+    <div>Shaded area to the left<b id="rA"></b></div>
+  </div>
+</div>
+</main>
+<script>
+const $=id=>document.getElementById(id), cv=$('c'), ctx=cv.getContext('2d');
+const S={mu:70,sd:10,zx:1,t:0,playing:false};
+const clamp=(v,a=0,b=1)=>Math.min(b,Math.max(a,v)), ease=u=>u*u*(3-2*u);
+const pdf=(v,m,s)=>Math.exp(-0.5*((v-m)/s)**2)/(s*Math.sqrt(2*Math.PI));
+function erf(x){const s=Math.sign(x);x=Math.abs(x);const t=1/(1+.3275911*x);
+ return s*(1-(((((1.061405429*t-1.453152027)*t)+1.421413741)*t-.284496736)*t+.254829592)*t*Math.exp(-x*x))}
+const cdf=z=>0.5*(1+erf(z/Math.SQRT2));
+const css=n=>getComputedStyle(document.documentElement).getPropertyValue(n).trim();
+const fmt=(v,d=2)=>(Math.abs(v)<5e-3?0:v).toFixed(d);
+let W=0,H=0;
+function resize(){const r=cv.getBoundingClientRect(),d=window.devicePixelRatio||1;W=r.width;H=r.height;cv.width=W*d;cv.height=H*d;ctx.setTransform(d,0,0,d,0,0);draw()}
+new ResizeObserver(resize).observe(cv);
+
+function state(){
+ const {mu,sd,zx,t}=S, a=ease(clamp(t*2)), b=ease(clamp(t*2-1));
+ const m=mu*(1-a), s=sd+(1-sd)*b, x=mu+zx*sd;
+ const lo0=Math.min(mu-4*sd,-4*sd), hi0=Math.max(mu+4*sd,4*sd);
+ const lo=lo0+(-4.2-lo0)*b, hi=hi0+(4.2-hi0)*b;
+ const v=m+(x-mu)*s/sd;
+ return {a,b,m,s,x,v,lo,hi};
+}
+function niceStep(r){const raw=r/8,p=10**Math.floor(Math.log10(raw)),f=raw/p;return (f<1.5?1:f<3.5?2:f<7.5?5:10)*p}
+
+function draw(){
+ if(!W)return;
+ const q=state(), L=36,R=16,T=14,B=44, pw=W-L-R, ph=H-T-B;
+ const X=v=>L+(v-q.lo)/(q.hi-q.lo)*pw;
+ const ymax=Math.max(pdf(0,0,S.sd),pdf(0,0,1))*1.12, Y=d=>T+ph*(1-d/ymax);
+ const col=q.b>0||q.a>=1?(q.b>=1?'--z':'--x'):'--x';
+ const mix=q.t===0?'--x':(S.t>=1?'--z':'--x');
+ const cx=css(S.t>=1?'--z':'--x'), fill=css(S.t>=1?'--fillz':'--fillx');
+ ctx.clearRect(0,0,W,H); ctx.font='13px Figtree,system-ui,sans-serif';
+ // axis + ticks
+ const st=niceStep(q.hi-q.lo), y0=Y(0);
+ ctx.strokeStyle=css('--line');ctx.fillStyle=css('--mute');ctx.lineWidth=1;ctx.textAlign='center';
+ ctx.beginPath();ctx.moveTo(L,y0);ctx.lineTo(W-R,y0);ctx.stroke();
+ for(let v=Math.ceil(q.lo/st)*st;v<=q.hi;v+=st){const px=X(v);ctx.beginPath();ctx.moveTo(px,y0);ctx.lineTo(px,y0+5);ctx.stroke();ctx.fillText(fmt(v,st<1?1:0),px,y0+20)}
+ ctx.textAlign='right';ctx.fillText(S.t>=1?'z':'value',W-R,y0+38);
+ // zero reference
+ ctx.setLineDash([4,4]);ctx.beginPath();ctx.moveTo(X(0),T);ctx.lineTo(X(0),y0);ctx.stroke();ctx.setLineDash([]);
+ // curve + shaded area
+ const N=240,lo=q.m-4.5*q.s,hi=q.m+4.5*q.s;
+ ctx.beginPath();ctx.moveTo(X(lo),y0);
+ for(let i=0;i<=N;i++){const u=lo+(hi-lo)*i/N;if(u>q.v)break;ctx.lineTo(X(u),Y(pdf(u,q.m,q.s)))}
+ ctx.lineTo(X(Math.min(q.v,hi)),y0);ctx.closePath();ctx.fillStyle=fill;ctx.fill();
+ ctx.beginPath();
+ for(let i=0;i<=N;i++){const u=lo+(hi-lo)*i/N,px=X(u),py=Y(pdf(u,q.m,q.s));i?ctx.lineTo(px,py):ctx.moveTo(px,py)}
+ ctx.strokeStyle=cx;ctx.lineWidth=3;ctx.stroke();
+ // mean line
+ ctx.lineWidth=2;ctx.beginPath();ctx.moveTo(X(q.m),y0);ctx.lineTo(X(q.m),Y(pdf(q.m,q.m,q.s)));ctx.stroke();
+ ctx.fillStyle=cx;ctx.beginPath();ctx.arc(X(q.m),y0,4,0,7);ctx.fill();
+ // sd bracket
+ const by=Y(pdf(q.m+q.s,q.m,q.s));ctx.lineWidth=1.5;ctx.beginPath();ctx.moveTo(X(q.m),by);ctx.lineTo(X(q.m+q.s),by);ctx.stroke();
+ ctx.textAlign='left';ctx.fillText('1 σ',X(q.m+q.s)+6,by+4);
+ // picked point
+ const py=Y(pdf(q.v,q.m,q.s));ctx.fillStyle=css('--ink');ctx.beginPath();ctx.arc(X(q.v),py,6,0,7);ctx.fill();
+ ctx.strokeStyle=css('--ink');ctx.lineWidth=1.5;ctx.beginPath();ctx.moveTo(X(q.v),py);ctx.lineTo(X(q.v),y0);ctx.stroke();
+ // readouts
+ const z=S.zx, t=S.t;
+ $('rM').textContent=fmt(q.m);$('rS').textContent=fmt(q.s);
+ $('rP').textContent=(t>=1?'z = ':'')+fmt(q.v);$('rA').textContent=fmt(cdf(z),4);
+ $('xV').textContent='x = '+fmt(q.x,1)+'  (z = '+fmt(z)+')';
+ $('stage').textContent=t<=0?'Original: X is normal with mean '+S.mu+' and σ '+S.sd:
+  t<1&&q.a<1?'Step 1: subtract μ = '+S.mu+' from every value':
+  t<1?'Step 2: divide by σ = '+S.sd:'Done: Z is standard normal (mean 0, σ 1)';
+ $('t').value=Math.round(t*1000);
+}
+function sync(){$('muV').textContent=S.mu;$('sdV').textContent=S.sd;draw()}
+$('mu').oninput=e=>{S.mu=+e.target.value;sync()};
+$('sd').oninput=e=>{S.sd=+e.target.value;sync()};
+$('zx').oninput=e=>{S.zx=+e.target.value;draw()};
+$('t').oninput=e=>{S.t=e.target.value/1000;stop();draw()};
+let raf,last;
+function stop(){S.playing=false;cancelAnimationFrame(raf);$('play').textContent='Play'}
+function tick(ts){if(!S.playing)return;S.t=clamp(S.t+(ts-last)/5000);last=ts;draw();if(S.t>=1)stop();else raf=requestAnimationFrame(tick)}
+$('play').onclick=()=>{if(S.playing){stop();return}if(S.t>=1)S.t=0;S.playing=true;$('play').textContent='Pause';last=performance.now();raf=requestAnimationFrame(tick)};
+$('reset').onclick=()=>{stop();S.t=0;draw()};
+sync();
+</script>
+</body>
+</html>
